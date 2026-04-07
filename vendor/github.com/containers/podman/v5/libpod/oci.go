@@ -5,9 +5,9 @@ package libpod
 import (
 	"net/http"
 
-	"github.com/containers/common/pkg/resize"
 	"github.com/containers/podman/v5/libpod/define"
 	"github.com/opencontainers/runtime-spec/specs-go"
+	"go.podman.io/common/pkg/resize"
 )
 
 // OCIRuntime is an implementation of an OCI runtime.
@@ -152,6 +152,14 @@ type OCIRuntime interface { //nolint:interfacebloat
 	// of this file means that the container was oom killed.
 	// This is the path to that file for a given container.
 	OOMFilePath(ctr *Container) (string, error)
+
+	// PersistDirectoryPath is the path to a container's persist directory.
+	// Not all OCI runtime implementations will have a persist directory.
+	// If they do, it may contain files such as the exit file and the OOM
+	// file.
+	// If the directory does not exist, the empty string and no error should
+	// be returned.
+	PersistDirectoryPath(ctr *Container) (string, error)
 
 	// RuntimeInfo returns verbose information about the runtime.
 	RuntimeInfo() (*define.ConmonInfo, *define.OCIRuntimeInfo, error)

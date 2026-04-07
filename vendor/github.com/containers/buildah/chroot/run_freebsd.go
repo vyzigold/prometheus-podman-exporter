@@ -14,11 +14,11 @@ import (
 	"syscall"
 
 	"github.com/containers/buildah/pkg/jail"
-	"github.com/containers/storage/pkg/fileutils"
-	"github.com/containers/storage/pkg/mount"
-	"github.com/containers/storage/pkg/unshare"
 	"github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/sirupsen/logrus"
+	"go.podman.io/storage/pkg/fileutils"
+	"go.podman.io/storage/pkg/mount"
+	"go.podman.io/storage/pkg/unshare"
 	"golang.org/x/sys/unix"
 )
 
@@ -41,6 +41,7 @@ var (
 type runUsingChrootSubprocOptions struct {
 	Spec       *specs.Spec
 	BundlePath string
+	NoPivot    bool
 }
 
 func setPlatformUnshareOptions(spec *specs.Spec, cmd *unshare.Cmd) error {

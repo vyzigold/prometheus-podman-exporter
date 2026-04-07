@@ -9,10 +9,13 @@ import (
 
 // ServiceOptions provides the input for starting an API and sidecar pprof services
 type ServiceOptions struct {
-	CorsHeaders string        // Cross-Origin Resource Sharing (CORS) headers
-	PProfAddr   string        // Network address to bind pprof profiles service
-	Timeout     time.Duration // Duration of inactivity the service should wait before shutting down
-	URI         string        // Path to unix domain socket service should listen on
+	CorsHeaders     string        // Cross-Origin Resource Sharing (CORS) headers
+	PProfAddr       string        // Network address to bind pprof profiles service
+	Timeout         time.Duration // Duration of inactivity the service should wait before shutting down
+	URI             string        // Path to unix domain socket service should listen on
+	TLSCertFile     string        // Path to serving certificate PEM file
+	TLSKeyFile      string        // Path to serving certificate key PEM file
+	TLSClientCAFile string        // Path to client certificate authority
 }
 
 // SystemCheckOptions provides options for checking storage consistency.
@@ -43,6 +46,7 @@ type SystemPruneOptions struct {
 	Volume   bool
 	Filters  map[string][]string `json:"filters" schema:"filters"`
 	External bool
+	Build    bool
 }
 
 // SystemPruneReport provides report after system prune is executed.
@@ -59,6 +63,7 @@ type SystemPruneReport struct {
 // cli to migrate runtimes of containers
 type SystemMigrateOptions struct {
 	NewRuntime string
+	MigrateDB  bool
 }
 
 // SystemDfOptions describes the options for getting df information

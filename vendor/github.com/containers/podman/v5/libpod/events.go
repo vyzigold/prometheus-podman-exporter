@@ -49,7 +49,7 @@ func (c *Container) newContainerEventWithInspectData(status events.Status, healt
 	e.Image = c.config.RootfsImageName
 	e.Type = events.Container
 	e.HealthStatus = healthCheckResult.Status
-	if c.config.HealthLogDestination == define.HealthCheckEventsLoggerDestination {
+	if c.HealthCheckLogDestination() == define.HealthCheckEventsLoggerDestination {
 		if len(healthCheckResult.Log) > 0 {
 			logData, err := json.Marshal(healthCheckResult.Log[len(healthCheckResult.Log)-1])
 			if err != nil {
@@ -135,6 +135,19 @@ func (c *Container) newExecDiedEvent(sessionID string, exitCode int) {
 	}
 }
 
+// newNetworkEvent creates a new event based on a network create/remove
+func (r *Runtime) NewNetworkEvent(status events.Status, netName, netID, netDriver string) {
+	e := events.NewEvent(status)
+	e.Network = netName
+	e.ID = netID
+	e.Attributes = make(map[string]string)
+	e.Attributes["driver"] = netDriver
+	e.Type = events.Network
+	if err := r.eventer.Write(e); err != nil {
+		logrus.Errorf("Unable to write network event: %q", err)
+	}
+}
+
 // newNetworkEvent creates a new event based on a network connect/disconnect
 func (c *Container) newNetworkEvent(status events.Status, netName string) {
 	e := events.NewEvent(status)
@@ -175,6 +188,16 @@ func (v *Volume) newVolumeEvent(status events.Status) {
 	e.Type = events.Volume
 	if err := v.runtime.eventer.Write(e); err != nil {
 		logrus.Errorf("Unable to write volume event: %q", err)
+	}
+}
+
+// NewSecretEvent creates a new event for a libpod secret
+func (r *Runtime) NewSecretEvent(status events.Status, secretID string) {
+	e := events.NewEvent(status)
+	e.ID = secretID
+	e.Type = events.Secret
+	if err := r.eventer.Write(e); err != nil {
+		logrus.Errorf("Unable to write secret event: %q", err)
 	}
 }
 

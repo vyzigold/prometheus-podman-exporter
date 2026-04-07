@@ -25,6 +25,7 @@ type Container struct {
 	Name       string
 	Labels     map[string]string
 	Image      string
+	ImageID    string
 	Created    int64
 	Started    int64
 	Exited     int64
@@ -88,7 +89,7 @@ func Containers() ([]Container, error) {
 	cntSizeCache.cacheLock.Unlock()
 
 	if cacheErr != nil {
-		return nil, err
+		return nil, err //nolint:nilnesserr
 	}
 
 	for _, rep := range reports {
@@ -111,6 +112,7 @@ func Containers() ([]Container, error) {
 			PodName:    rep.PodName,
 			Name:       rep.Names[0],
 			Image:      rep.Image,
+			ImageID:    getID(rep.ImageID),
 			Created:    rep.Created.Unix(),
 			Started:    rep.StartedAt,
 			Exited:     rep.ExitedAt,

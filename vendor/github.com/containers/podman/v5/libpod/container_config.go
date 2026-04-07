@@ -6,14 +6,14 @@ import (
 	"net"
 	"time"
 
-	"github.com/containers/common/libnetwork/types"
-	"github.com/containers/common/pkg/secrets"
-	"github.com/containers/image/v5/manifest"
 	"github.com/containers/podman/v5/libpod/define"
 	"github.com/containers/podman/v5/pkg/namespaces"
 	"github.com/containers/podman/v5/pkg/specgen"
-	"github.com/containers/storage"
 	spec "github.com/opencontainers/runtime-spec/specs-go"
+	"go.podman.io/common/libnetwork/types"
+	"go.podman.io/common/pkg/secrets"
+	"go.podman.io/image/v5/manifest"
+	"go.podman.io/storage"
 )
 
 // ContainerConfig contains all information that was used to create the
@@ -76,7 +76,7 @@ type ContainerConfig struct {
 	// namespace. They are used by the OCI runtime when creating the
 	// container, and by c/storage to ensure that the container's files have
 	// the appropriate owner.
-	IDMappings storage.IDMappingOptions `json:"idMappingsOptions,omitempty"`
+	IDMappings storage.IDMappingOptions `json:"idMappingsOptions"`
 
 	// Dependencies are the IDs of dependency containers.
 	// These containers must be started before this container is started.
@@ -162,6 +162,8 @@ type ContainerRootFSConfig struct {
 	// moved out of Libpod into pkg/specgen).
 	// Please DO NOT reuse the `imageVolumes` name in container JSON again.
 	ImageVolumes []*ContainerImageVolume `json:"ctrImageVolumes,omitempty"`
+	// ArtifactVolumes lists the artifact volumes to mount into the container.
+	ArtifactVolumes []*ContainerArtifactVolume `json:"artifactVolumes,omitempty"`
 	// CreateWorkingDir indicates that Libpod should create the container's
 	// working directory if it does not exist. Some OCI runtimes do this by
 	// default, but others do not.
@@ -286,15 +288,17 @@ type ContainerNetworkConfig struct {
 	// DNS options to be set in container resolv.conf
 	// With override options in host resolv if set
 	DNSOption []string `json:"dnsOption,omitempty"`
+	// UseImageHostname indicates that /etc/hostname should not be
+	// bind-mounted inside the container.
+	UseImageHostname bool `json:"useImageHostname"`
 	// UseImageHosts indicates that /etc/hosts should not be
 	// bind-mounted inside the container.
 	// Conflicts with HostAdd.
 	UseImageHosts bool
-	// BaseHostsFile is the path to a hosts file, the entries from this file
-	// are added to the containers hosts file. As special value "image" is
-	// allowed which uses the /etc/hosts file from within the image and "none"
-	// which uses no base file at all. If it is empty we should default
-	// to the base_hosts_file configuration in containers.conf.
+	// BaseHostsFile is the base file to create the `/etc/hosts` file inside the container.
+	// This must either be an absolute path to a file on the host system, or one of the
+	// special flags `image` or `none`.
+	// If it is empty it defaults to the base_hosts_file configuration in containers.conf.
 	BaseHostsFile string `json:"baseHostsFile,omitempty"`
 	// Hosts to add in container
 	// Will be appended to host's host file
@@ -374,7 +378,7 @@ type ContainerMiscConfig struct {
 	LogPath string `json:"logPath"`
 	// LogTag is the tag used for logging
 	LogTag string `json:"logTag"`
-	// LogSize is the tag used for logging
+	// LogSize is the maximum size of the container's log file
 	LogSize int64 `json:"logSize"`
 	// LogDriver driver for logs
 	LogDriver string `json:"logDriver"`
@@ -400,6 +404,9 @@ type ContainerMiscConfig struct {
 	// IsInfra is a bool indicating whether this container is an infra container used for
 	// sharing kernel namespaces in a pod
 	IsInfra bool `json:"pause"`
+	// IsDefaultInfra is a bool indicating whether this container is a default infra container
+	// using the default rootfs with catatonit bind-mounted into it.
+	IsDefaultInfra bool `json:"defaultPause"`
 	// IsService is a bool indicating whether this container is a service container used for
 	// tracking the life cycle of K8s service.
 	IsService bool `json:"isService"`
@@ -414,13 +421,16 @@ type ContainerMiscConfig struct {
 	// HealthCheckOnFailureAction defines an action to take once the container turns unhealthy.
 	HealthCheckOnFailureAction define.HealthCheckOnFailureAction `json:"healthcheck_on_failure_action"`
 	// HealthLogDestination defines the destination where the log is stored
-	HealthLogDestination string `json:"healthLogDestination,omitempty"`
+	// Nil value means the default value (local).
+	HealthLogDestination *string `json:"healthLogDestination,omitempty"`
 	// HealthMaxLogCount is maximum number of attempts in the HealthCheck log file.
 	// ('0' value means an infinite number of attempts in the log file)
-	HealthMaxLogCount uint `json:"healthMaxLogCount,omitempty"`
+	// Nil value means the default value (5).
+	HealthMaxLogCount *uint `json:"healthMaxLogCount,omitempty"`
 	// HealthMaxLogSize is the maximum length in characters of stored HealthCheck log
 	// ("0" value means an infinite log length)
-	HealthMaxLogSize uint `json:"healthMaxLogSize,omitempty"`
+	// Nil value means the default value (500).
+	HealthMaxLogSize *uint `json:"healthMaxLogSize,omitempty"`
 	// StartupHealthCheckConfig is the configuration of the startup
 	// healthcheck for the container. This will run before the regular HC
 	// runs, and when it passes the regular HC will be activated.
@@ -473,6 +483,8 @@ type InfraInherit struct {
 	Volumes            []*specgen.NamedVolume   `json:"volumes,omitempty"`
 	ShmSize            *int64                   `json:"shm_size"`
 	ShmSizeSystemd     *int64                   `json:"shm_size_systemd"`
+	UseImageHosts      bool                     `json:"use_image_hosts"`
+	UseImageHostname   bool                     `json:"use_image_hostname"`
 }
 
 // IsDefaultShmSize determines if the user actually set the shm in the parent ctr or if it has been set to the default size

@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/containers/image/v5/docker/reference"
 	"github.com/containers/podman/v5/cmd/podman/registry"
 	"github.com/containers/podman/v5/pkg/domain/entities"
+	"go.podman.io/image/v5/docker/reference"
 )
 
 var imageRep ImageReport
@@ -45,7 +45,7 @@ func Images() ([]Image, error) {
 
 func updateImages() {
 	images := make([]Image, 0)
-	reports, err := registry.ImageEngine().List(registry.GetContext(), entities.ImageListOptions{All: true})
+	reports, err := registry.ImageEngine().List(registry.Context(), entities.ImageListOptions{All: true})
 
 	imageRep.repLock.Lock()
 	defer imageRep.repLock.Unlock()

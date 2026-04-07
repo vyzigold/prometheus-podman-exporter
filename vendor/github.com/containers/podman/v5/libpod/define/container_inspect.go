@@ -6,8 +6,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/containers/image/v5/manifest"
 	"github.com/containers/podman/v5/pkg/signal"
+	"go.podman.io/image/v5/manifest"
 )
 
 type InspectIDMappings struct {
@@ -111,8 +111,8 @@ type InspectContainerConfig struct {
 func (insp *InspectContainerConfig) UnmarshalJSON(data []byte) error {
 	type Alias InspectContainerConfig
 	aux := &struct {
-		Entrypoint interface{} `json:"Entrypoint"`
-		StopSignal interface{} `json:"StopSignal"`
+		Entrypoint any `json:"Entrypoint"`
+		StopSignal any `json:"StopSignal"`
 		*Alias
 	}{
 		Alias: (*Alias)(insp),
@@ -126,7 +126,7 @@ func (insp *InspectContainerConfig) UnmarshalJSON(data []byte) error {
 		insp.Entrypoint = strings.Split(entrypoint, " ")
 	case []string:
 		insp.Entrypoint = entrypoint
-	case []interface{}:
+	case []any:
 		insp.Entrypoint = []string{}
 		for _, entry := range entrypoint {
 			if str, ok := entry.(string); ok {
@@ -312,8 +312,8 @@ type InspectContainerState struct {
 	Health         *HealthCheckResults `json:"Health,omitempty"`
 	Checkpointed   bool                `json:"Checkpointed,omitempty"`
 	CgroupPath     string              `json:"CgroupPath,omitempty"`
-	CheckpointedAt time.Time           `json:"CheckpointedAt,omitempty"`
-	RestoredAt     time.Time           `json:"RestoredAt,omitempty"`
+	CheckpointedAt time.Time           `json:"CheckpointedAt"`
+	RestoredAt     time.Time           `json:"RestoredAt"`
 	CheckpointLog  string              `json:"CheckpointLog,omitempty"`
 	CheckpointPath string              `json:"CheckpointPath,omitempty"`
 	RestoreLog     string              `json:"RestoreLog,omitempty"`
@@ -356,8 +356,6 @@ type HealthCheckLog struct {
 // as possible from the spec and container config.
 // Some things cannot be inferred. These will be populated by spec annotations
 // (if available).
-//
-//nolint:revive,stylecheck // Field names are fixed for compatibility and cannot be changed.
 type InspectContainerHostConfig struct {
 	// Binds contains an array of user-added mounts.
 	// Both volume mounts and named volumes are included.
@@ -443,6 +441,8 @@ type InspectContainerHostConfig struct {
 	// ExtraHosts contains hosts that will be added to the container's
 	// /etc/hosts.
 	ExtraHosts []string `json:"ExtraHosts"`
+	// HostsFile is the base file to create the `/etc/hosts` file inside the container.
+	HostsFile string `json:"HostsFile"`
 	// GroupAdd contains groups that the user inside the container will be
 	// added to.
 	GroupAdd []string `json:"GroupAdd"`
@@ -796,6 +796,8 @@ type InspectContainerData struct {
 	LockNumber              uint32                      `json:"lockNumber"`
 	Config                  *InspectContainerConfig     `json:"Config"`
 	HostConfig              *InspectContainerHostConfig `json:"HostConfig"`
+	UseImageHosts           bool                        `json:"UseImageHosts"`
+	UseImageHostname        bool                        `json:"UseImageHostname"`
 }
 
 // InspectExecSession contains information about a given exec session.

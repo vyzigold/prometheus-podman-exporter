@@ -20,7 +20,7 @@ var errMinCacheDurtion = errors.New("invalid cache duration value, shall be >= "
 
 type exporterOptions struct {
 	debug                     bool
-	webListen                 string
+	webListen                 []string
 	webMaxRequests            int
 	webTelemetryPath          string
 	webDisableExporterMetrics bool
@@ -41,7 +41,7 @@ type exporterOptions struct {
 func Start(cmd *cobra.Command, _ []string) error {
 	// setup exporter
 	logLevel := "info"
-	promlogConfig := &promslog.Config{Level: &promslog.AllowedLevel{}}
+	promlogConfig := &promslog.Config{Level: promslog.NewLevel()}
 
 	cmdOptions, err := parseOptions(cmd)
 	if err != nil {
@@ -52,13 +52,15 @@ func Start(cmd *cobra.Command, _ []string) error {
 		logLevel = "debug"
 	}
 
-	if err := promlogConfig.Level.Set(logLevel); err != nil {
+	err = promlogConfig.Level.Set(logLevel)
+	if err != nil {
 		return err
 	}
 
 	logger := promslog.New(promlogConfig)
 
-	if err := setEnabledCollectors(cmdOptions); err != nil {
+	err = setEnabledCollectors(cmdOptions)
+	if err != nil {
 		logger.Error("cannot set enabled collectors", "err", err)
 
 		return err
@@ -71,41 +73,44 @@ func Start(cmd *cobra.Command, _ []string) error {
 		cmdOptions.webTelemetryPath,
 		newHandler(cmdOptions.webDisableExporterMetrics, cmdOptions.webMaxRequests, logger),
 	)
+
 	http.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) {
-		w.Write([]byte(`<html>
+		_, err := w.Write([]byte(`<html>
 			<head><title>Podman Exporter</title></head>
 			<body>
 			<h1>Podman Exporter</h1>
 			<p><a href="` + "/metrics" + `">Metrics</a></p>
 			</body>
 			</html>`))
+		if err != nil {
+			logger.Warn("failed to write index page", "err", err)
+		}
 	})
 
 	// setup podman registry
 	pdcs.SetupRegistry()
 	// start podman event streamer and initiate first update.
-	updateImages := false
-	if cmdOptions.enableAll || cmdOptions.enableImages {
-		updateImages = true
-	}
+	updateImages := cmdOptions.enableAll || cmdOptions.enableImages
 
-	pdcs.StartEventStreamer(logger, updateImages)
+	go pdcs.StartEventStreamer(logger, updateImages)
+
 	pdcs.StartCacheSizeTicker(logger, cmdOptions.cacheDuration)
 
-	logger.Info("Listening on", "address", cmdOptions.webListen)
+	logger.Info("Listening on", "addresses", cmdOptions.webListen)
 
 	server := &http.Server{
 		ReadHeaderTimeout: 3 * time.Second, //nolint:mnd
 	}
 	serverSystemd := false
-	serverWebListen := []string{cmdOptions.webListen}
+	serverWebListen := cmdOptions.webListen
 
 	toolkitFlag := new(web.FlagConfig)
 	toolkitFlag.WebSystemdSocket = &serverSystemd
 	toolkitFlag.WebListenAddresses = &serverWebListen
 	toolkitFlag.WebConfigFile = &cmdOptions.webConfigFile
 
-	if err := web.ListenAndServe(server, toolkitFlag, logger); err != nil {
+	err = web.ListenAndServe(server, toolkitFlag, logger)
+	if err != nil {
 		return err
 	}
 
@@ -167,7 +172,7 @@ func parseOptions(cmd *cobra.Command) (*exporterOptions, error) { //nolint:cyclo
 		return nil, err
 	}
 
-	webListen, err := cmd.Flags().GetString("web.listen-address")
+	webListen, err := cmd.Flags().GetStringArray("web.listen-address")
 	if err != nil {
 		return nil, err
 	}

@@ -10,41 +10,43 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"syscall"
 	"time"
 
 	"github.com/containers/buildah/pkg/parse"
-	"github.com/containers/common/libimage"
-	"github.com/containers/common/libnetwork/network"
-	nettypes "github.com/containers/common/libnetwork/types"
-	"github.com/containers/common/pkg/cgroups"
-	"github.com/containers/common/pkg/config"
-	"github.com/containers/common/pkg/secrets"
-	systemdCommon "github.com/containers/common/pkg/systemd"
-	"github.com/containers/image/v5/pkg/sysregistriesv2"
-	is "github.com/containers/image/v5/storage"
-	"github.com/containers/image/v5/types"
 	"github.com/containers/podman/v5/libpod/define"
 	"github.com/containers/podman/v5/libpod/events"
 	"github.com/containers/podman/v5/libpod/lock"
 	"github.com/containers/podman/v5/libpod/plugin"
 	"github.com/containers/podman/v5/libpod/shutdown"
 	"github.com/containers/podman/v5/pkg/domain/entities"
+	"github.com/containers/podman/v5/pkg/domain/entities/reports"
 	"github.com/containers/podman/v5/pkg/rootless"
 	"github.com/containers/podman/v5/pkg/systemd"
 	"github.com/containers/podman/v5/pkg/util"
-	"github.com/containers/storage"
-	"github.com/containers/storage/pkg/fileutils"
-	"github.com/containers/storage/pkg/lockfile"
-	"github.com/containers/storage/pkg/unshare"
 	"github.com/docker/docker/pkg/namesgenerator"
 	"github.com/hashicorp/go-multierror"
 	jsoniter "github.com/json-iterator/go"
 	spec "github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/sirupsen/logrus"
-	"golang.org/x/exp/slices"
+	"go.podman.io/common/libimage"
+	"go.podman.io/common/libnetwork/network"
+	nettypes "go.podman.io/common/libnetwork/types"
+	"go.podman.io/common/pkg/cgroups"
+	"go.podman.io/common/pkg/config"
+	artStore "go.podman.io/common/pkg/libartifact/store"
+	"go.podman.io/common/pkg/secrets"
+	systemdCommon "go.podman.io/common/pkg/systemd"
+	"go.podman.io/image/v5/pkg/sysregistriesv2"
+	is "go.podman.io/image/v5/storage"
+	"go.podman.io/image/v5/types"
+	"go.podman.io/storage"
+	"go.podman.io/storage/pkg/fileutils"
+	"go.podman.io/storage/pkg/lockfile"
+	"go.podman.io/storage/pkg/unshare"
 )
 
 // Set up the JSON library for all of Libpod
@@ -81,6 +83,9 @@ type Runtime struct {
 	libimageRuntime        *libimage.Runtime
 	libimageEventsShutdown chan bool
 	lockManager            lock.Manager
+
+	// ArtifactStore returns the artifact store created from the runtime.
+	ArtifactStore func() (*artStore.ArtifactStore, error)
 
 	// Worker
 	workerChannel chan func()
@@ -171,15 +176,6 @@ func NewRuntime(ctx context.Context, options ...RuntimeOption) (*Runtime, error)
 	return newRuntimeFromConfig(ctx, conf, options...)
 }
 
-// NewRuntimeFromConfig creates a new container runtime using the given
-// configuration file for its default configuration. Passed RuntimeOption
-// functions can be used to mutate this configuration further.
-// An error will be returned if the configuration file at the given path does
-// not exist or cannot be loaded
-func NewRuntimeFromConfig(ctx context.Context, userConfig *config.Config, options ...RuntimeOption) (*Runtime, error) {
-	return newRuntimeFromConfig(ctx, userConfig, options...)
-}
-
 func newRuntimeFromConfig(ctx context.Context, conf *config.Config, options ...RuntimeOption) (*Runtime, error) {
 	runtime := new(Runtime)
 
@@ -214,7 +210,7 @@ func newRuntimeFromConfig(ctx context.Context, conf *config.Config, options ...R
 		return nil, err
 	}
 
-	if err := shutdown.Register("libpod", func(sig os.Signal) error {
+	if err := shutdown.Register("libpod", func(_ os.Signal) error {
 		if runtime.store != nil {
 			_, _ = runtime.store.Shutdown(false)
 		}
@@ -289,6 +285,14 @@ func getLockManager(runtime *Runtime) (lock.Manager, error) {
 	return manager, nil
 }
 
+func getBoltDBPath(runtime *Runtime) string {
+	baseDir := runtime.config.Engine.StaticDir
+	if runtime.storageConfig.TransientStore {
+		baseDir = runtime.config.Engine.TmpDir
+	}
+	return filepath.Join(baseDir, "bolt_state.db")
+}
+
 func getDBState(runtime *Runtime) (State, error) {
 	// TODO - if we further break out the state implementation into
 	// libpod/state, the config could take care of the code below.  It
@@ -300,15 +304,24 @@ func getDBState(runtime *Runtime) (State, error) {
 	}
 
 	// get default boltdb path
-	baseDir := runtime.config.Engine.StaticDir
-	if runtime.storageConfig.TransientStore {
-		baseDir = runtime.config.Engine.TmpDir
-	}
-	boltDBPath := filepath.Join(baseDir, "bolt_state.db")
+	boltDBPath := getBoltDBPath(runtime)
+	sqlitePath := sqliteStatePath(runtime)
 
 	switch backend {
 	case config.DBBackendDefault:
-		// for backwards compatibility check if boltdb exists, if it does not we use sqlite
+		// First check if we have a sqlite file, then we know we must use sqlite.
+		if err := fileutils.Exists(sqlitePath); err == nil {
+			// need to set DBBackend string so podman info will show the backend name correctly
+			runtime.config.Engine.DBBackend = config.DBBackendSQLite.String()
+			return NewSqliteState(runtime)
+		} else if !errors.Is(err, fs.ErrNotExist) {
+			// Return error here some other problem with the sqlite file, rather than silently
+			// switch to boltdb which would be hard to debug for the user return the error back
+			// as this likely a real bug.
+			return nil, err
+		}
+
+		// for backwards compatibility check if boltdb exists, if it does not we also use sqlite
 		if err := fileutils.Exists(boltDBPath); err != nil {
 			if errors.Is(err, fs.ErrNotExist) {
 				// need to set DBBackend string so podman info will show the backend name correctly
@@ -352,7 +365,7 @@ func makeRuntime(ctx context.Context, runtime *Runtime) (retErr error) {
 	}
 
 	// Make the static files directory if it does not exist
-	if err := os.MkdirAll(runtime.config.Engine.StaticDir, 0700); err != nil {
+	if err := os.MkdirAll(runtime.config.Engine.StaticDir, 0o700); err != nil {
 		// The directory is allowed to exist
 		if !errors.Is(err, os.ErrExist) {
 			return fmt.Errorf("creating runtime static files directory %q: %w", runtime.config.Engine.StaticDir, err)
@@ -360,7 +373,7 @@ func makeRuntime(ctx context.Context, runtime *Runtime) (retErr error) {
 	}
 
 	// Create the TmpDir if needed
-	if err := os.MkdirAll(runtime.config.Engine.TmpDir, 0751); err != nil {
+	if err := os.MkdirAll(runtime.config.Engine.TmpDir, 0o751); err != nil {
 		return fmt.Errorf("creating runtime temporary files directory: %w", err)
 	}
 
@@ -368,9 +381,12 @@ func makeRuntime(ctx context.Context, runtime *Runtime) (retErr error) {
 	// This is not strictly necessary at this point, but the path not
 	// existing can cause troubles with DB path validation on OSTree based
 	// systems. Ref: https://github.com/containers/podman/issues/23515
-	if err := os.MkdirAll(runtime.config.Engine.VolumePath, 0700); err != nil {
+	if err := os.MkdirAll(runtime.config.Engine.VolumePath, 0o700); err != nil {
 		return fmt.Errorf("creating runtime volume path directory: %w", err)
 	}
+
+	// Must be set before getDBState() as this will override it otherwise.
+	originalDBConfig := runtime.config.Engine.DBBackend
 
 	// Set up the state.
 	runtime.state, err = getDBState(runtime)
@@ -532,6 +548,11 @@ func makeRuntime(ctx context.Context, runtime *Runtime) (retErr error) {
 		}
 		runtime.config.Network.NetworkBackend = string(netBackend)
 		runtime.network = netInterface
+
+		// Using sync once value to only init the store exactly once and only when it will be actually be used.
+		runtime.ArtifactStore = sync.OnceValues(func() (*artStore.ArtifactStore, error) {
+			return artStore.NewArtifactStore(filepath.Join(runtime.storageConfig.GraphRoot, "artifacts"), runtime.SystemContext())
+		})
 	}
 
 	// We now need to see if the system has restarted
@@ -636,6 +657,20 @@ func makeRuntime(ctx context.Context, runtime *Runtime) (retErr error) {
 
 		if err2 := runtime.refresh(ctx, runtimeAliveFile); err2 != nil {
 			return err2
+		}
+	} else if runtime.state.Type() == "boltdb" {
+		if originalDBConfig == "" && fileutils.Exists(sqliteStatePath(runtime)) == nil {
+			// Another process must have migrated to sqlite in parallel, boltdb is now invalid so switch the state to sqlite.
+			// Ignore errors as there is nothing we can do about them at this point.
+			_ = runtime.state.Close()
+			runtime.state, err = NewSqliteState(runtime)
+			if err != nil {
+				return fmt.Errorf("failed to load sqlite state after detecting database migration: %w", err)
+			}
+		} else if os.Getenv("SUPPRESS_BOLTDB_WARNING") == "" && os.Getenv("CI_DESIRED_DATABASE") != "boltdb" {
+			// Only warn about the database if we're not refreshing the state.
+			// Refresh will attempt an automatic migration.
+			logrus.Warnf("The deprecated BoltDB database driver is in use. This driver will be removed in the upcoming Podman 6.0 release in mid 2026. It is advised that you migrate to SQLite to avoid issues when this occurs by rebooting and running podman again or using the `podman system migrate --migrate-db` command. IMPORTANT, only use that command when you can ensure they will be no parallel podman processes running, if you are unsure do the reboot. Set SUPPRESS_BOLTDB_WARNING environment variable to remove this message.")
 		}
 	}
 
@@ -822,6 +857,19 @@ func (r *Runtime) Shutdown(force bool) error {
 func (r *Runtime) refresh(ctx context.Context, alivePath string) error {
 	logrus.Debugf("Podman detected system restart - performing state refresh")
 
+	if os.Getenv("CI_DESIRED_DATABASE") != "boltdb" {
+		if err := r.checkCanMigrate(); err != nil {
+			if errors.Is(err, errCannotMigrateHardcodedBolt) {
+				logrus.Infof("Refusing to automatically migrate from BoltDB to SQLite as BoltDB is hardcoded in containers.conf")
+			}
+		} else {
+			// We are always safe to continue if this fails; the old database will still be in use.
+			if err := r.migrateDB(); err != nil {
+				logrus.Errorf("Automatic migration from BoltDB to SQLite failed: %v", err)
+			}
+		}
+	}
+
 	// Clear state of database if not running in container
 	if !graphRootMounted() {
 		// First clear the state in the database
@@ -885,7 +933,7 @@ func (r *Runtime) refresh(ctx context.Context, alivePath string) error {
 	}
 
 	// Create a file indicating the runtime is alive and ready
-	file, err := os.OpenFile(alivePath, os.O_RDONLY|os.O_CREATE, 0644)
+	file, err := os.OpenFile(alivePath, os.O_RDONLY|os.O_CREATE, 0o644)
 	if err != nil {
 		return fmt.Errorf("creating runtime status file: %w", err)
 	}
@@ -1264,12 +1312,60 @@ func (r *Runtime) LockConflicts() (map[uint32][]string, []uint32, error) {
 	return toReturn, locksHeld, nil
 }
 
+// PruneBuildContainers removes any build containers that were created during the build,
+// but were not removed because the build was unexpectedly terminated.
+//
+// Note: This is not safe operation and should be executed only when no builds are in progress. It can interfere with builds in progress.
+func (r *Runtime) PruneBuildContainers() ([]*reports.PruneReport, error) {
+	stageContainersPruneReports := []*reports.PruneReport{}
+
+	containers, err := r.store.Containers()
+	if err != nil {
+		return stageContainersPruneReports, err
+	}
+	for _, container := range containers {
+		path, err := r.store.ContainerDirectory(container.ID)
+		if err != nil {
+			return stageContainersPruneReports, err
+		}
+		if err := fileutils.Exists(filepath.Join(path, "buildah.json")); err != nil {
+			continue
+		}
+
+		report := &reports.PruneReport{
+			Id: container.ID,
+		}
+		size, err := r.store.ContainerSize(container.ID)
+		if err != nil {
+			report.Err = err
+		}
+		report.Size = uint64(size)
+
+		if err := r.store.DeleteContainer(container.ID); err != nil {
+			report.Err = errors.Join(report.Err, err)
+		}
+		stageContainersPruneReports = append(stageContainersPruneReports, report)
+	}
+	return stageContainersPruneReports, nil
+}
+
 // SystemCheck checks our storage for consistency, and depending on the options
 // specified, will attempt to remove anything which fails consistency checks.
-func (r *Runtime) SystemCheck(ctx context.Context, options entities.SystemCheckOptions) (entities.SystemCheckReport, error) {
+func (r *Runtime) SystemCheck(_ context.Context, options entities.SystemCheckOptions) (entities.SystemCheckReport, error) {
 	what := storage.CheckEverything()
 	if options.Quick {
-		what = storage.CheckMost()
+		// Turn off checking layer digests and layer contents to do quick check.
+		// This is not a complete check like storage.CheckEverything(), and may fail detecting
+		// whether a file is missing from the image or its content has changed.
+		// In some cases it's desirable to trade check thoroughness for speed.
+		what = &storage.CheckOptions{
+			LayerDigests:   false,
+			LayerMountable: true,
+			LayerContents:  false,
+			LayerData:      true,
+			ImageData:      true,
+			ContainerData:  true,
+		}
 	}
 	if options.UnreferencedLayerMaximumAge != nil {
 		tmp := *options.UnreferencedLayerMaximumAge

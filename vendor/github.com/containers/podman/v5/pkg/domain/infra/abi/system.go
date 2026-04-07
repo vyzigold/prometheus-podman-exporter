@@ -15,18 +15,21 @@ import (
 	"github.com/containers/podman/v5/libpod/define"
 	"github.com/containers/podman/v5/pkg/domain/entities"
 	"github.com/containers/podman/v5/pkg/domain/entities/reports"
+	"github.com/containers/podman/v5/pkg/emulation"
 	"github.com/containers/podman/v5/pkg/util"
-	"github.com/containers/storage"
-	"github.com/containers/storage/pkg/directory"
-	"github.com/containers/storage/pkg/fileutils"
-	"github.com/sirupsen/logrus"
+	"go.podman.io/storage"
+	"go.podman.io/storage/pkg/directory"
+	"go.podman.io/storage/pkg/fileutils"
 )
 
-func (ic *ContainerEngine) Info(ctx context.Context) (*define.Info, error) {
+func (ic *ContainerEngine) Info(_ context.Context) (*define.Info, error) {
 	info, err := ic.Libpod.Info()
 	if err != nil {
 		return nil, err
 	}
+
+	info.Host.EmulatedArchitectures = emulation.Registered()
+
 	info.Host.RemoteSocket = &define.RemoteSocket{Path: ic.Libpod.RemoteURI()}
 
 	// `podman system connection add` invokes podman via ssh to fill in connection string. Here
@@ -61,16 +64,16 @@ func (ic *ContainerEngine) Info(ctx context.Context) (*define.Info, error) {
 	return info, nil
 }
 
-// SystemPrune removes unused data from the system. Pruning pods, containers, networks, volumes and images.
+// SystemPrune removes unused data from the system. Pruning pods, containers, build container, networks, volumes and images.
 func (ic *ContainerEngine) SystemPrune(ctx context.Context, options entities.SystemPruneOptions) (*entities.SystemPruneReport, error) {
 	var systemPruneReport = new(entities.SystemPruneReport)
 
 	if options.External {
-		if options.All || options.Volume || len(options.Filters) > 0 {
+		if options.All || options.Volume || len(options.Filters) > 0 || options.Build {
 			return nil, fmt.Errorf("system prune --external cannot be combined with other options")
 		}
-		err := ic.Libpod.GarbageCollect()
-		if err != nil {
+
+		if err := ic.Libpod.GarbageCollect(); err != nil {
 			return nil, err
 		}
 		return systemPruneReport, nil
@@ -81,6 +84,17 @@ func (ic *ContainerEngine) SystemPrune(ctx context.Context, options entities.Sys
 		filters = append(filters, fmt.Sprintf("%s=%s", k, v[0]))
 	}
 	reclaimedSpace := (uint64)(0)
+
+	// Prune Build Containers
+	if options.Build {
+		stageContainersPruneReports, err := ic.Libpod.PruneBuildContainers()
+		if err != nil {
+			return nil, err
+		}
+		reclaimedSpace += reports.PruneReportsSize(stageContainersPruneReports)
+		systemPruneReport.ContainerPruneReports = append(systemPruneReport.ContainerPruneReports, stageContainersPruneReports...)
+	}
+
 	found := true
 	for found {
 		found = false
@@ -164,7 +178,7 @@ func (ic *ContainerEngine) SystemPrune(ctx context.Context, options entities.Sys
 	return systemPruneReport, nil
 }
 
-func (ic *ContainerEngine) SystemDf(ctx context.Context, options entities.SystemDfOptions) (*entities.SystemDfReport, error) {
+func (ic *ContainerEngine) SystemDf(ctx context.Context, _ entities.SystemDfOptions) (*entities.SystemDfReport, error) {
 	var (
 		dfImages = []*entities.SystemDfImageReport{}
 	)
@@ -288,18 +302,12 @@ func (ic *ContainerEngine) Reset(ctx context.Context) error {
 	return ic.Libpod.Reset(ctx)
 }
 
-func (ic *ContainerEngine) Renumber(ctx context.Context) error {
+func (ic *ContainerEngine) Renumber(_ context.Context) error {
 	return ic.Libpod.RenumberLocks()
 }
 
-func (ic *ContainerEngine) Migrate(ctx context.Context, options entities.SystemMigrateOptions) error {
-	return ic.Libpod.Migrate(options.NewRuntime)
-}
-
-func (se SystemEngine) Shutdown(ctx context.Context) {
-	if err := se.Libpod.Shutdown(false); err != nil {
-		logrus.Error(err)
-	}
+func (ic *ContainerEngine) Migrate(_ context.Context, options entities.SystemMigrateOptions) error {
+	return ic.Libpod.Migrate(options.NewRuntime, options.MigrateDB)
 }
 
 func unshareEnv(graphroot, runroot string) []string {
@@ -308,7 +316,7 @@ func unshareEnv(graphroot, runroot string) []string {
 		fmt.Sprintf("CONTAINERS_RUNROOT=%s", runroot))
 }
 
-func (ic *ContainerEngine) Unshare(ctx context.Context, args []string, options entities.SystemUnshareOptions) error {
+func (ic *ContainerEngine) Unshare(_ context.Context, args []string, options entities.SystemUnshareOptions) error {
 	unshare := func() error {
 		cmd := exec.Command(args[0], args[1:]...)
 		cmd.Env = unshareEnv(ic.Libpod.StorageConfig().GraphRoot, ic.Libpod.StorageConfig().RunRoot)
@@ -324,7 +332,7 @@ func (ic *ContainerEngine) Unshare(ctx context.Context, args []string, options e
 	return unshare()
 }
 
-func (ic ContainerEngine) Version(ctx context.Context) (*entities.SystemVersionReport, error) {
+func (ic *ContainerEngine) Version(_ context.Context) (*entities.SystemVersionReport, error) {
 	var report entities.SystemVersionReport
 	v, err := define.GetVersion()
 	if err != nil {
@@ -334,7 +342,7 @@ func (ic ContainerEngine) Version(ctx context.Context) (*entities.SystemVersionR
 	return &report, err
 }
 
-func (ic ContainerEngine) Locks(ctx context.Context) (*entities.LocksReport, error) {
+func (ic *ContainerEngine) Locks(_ context.Context) (*entities.LocksReport, error) {
 	var report entities.LocksReport
 	conflicts, held, err := ic.Libpod.LockConflicts()
 	if err != nil {
@@ -345,7 +353,7 @@ func (ic ContainerEngine) Locks(ctx context.Context) (*entities.LocksReport, err
 	return &report, nil
 }
 
-func (ic ContainerEngine) SystemCheck(ctx context.Context, options entities.SystemCheckOptions) (*entities.SystemCheckReport, error) {
+func (ic *ContainerEngine) SystemCheck(ctx context.Context, options entities.SystemCheckOptions) (*entities.SystemCheckReport, error) {
 	report, err := ic.Libpod.SystemCheck(ctx, options)
 	if err != nil {
 		return nil, err

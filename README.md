@@ -50,7 +50,7 @@ Flags:
       --version                               Print version and exit.
       --web.config.file string                [EXPERIMENTAL] Path to configuration file that can enable TLS or authentication.
   -e, --web.disable-exporter-metrics          Exclude metrics about the exporter itself (promhttp_*, process_*, go_*).
-  -l, --web.listen-address string             Address on which to expose metrics and web interface. (default ":9882")
+  -l, --web.listen-address string             Addresses on which to expose metrics and web interface. (default ":9882")
   -m, --web.max-requests int                  Maximum number of parallel scrape requests. Use 0 to disable (default 40)
   -p, --web.telemetry-path string             Path under which to expose metrics. (default "/metrics")
 ```
@@ -86,13 +86,18 @@ The table below list all existing collector and their description.
 ```shell
 # HELP podman_container_info Container information.
 # TYPE podman_container_info gauge
-podman_container_info{id="19286a13dc23",image="docker.io/library/sonarqube:latest",name="sonar01",pod_id="",pod_name="",ports="0.0.0.0:9000->9000/tcp"} 1
-podman_container_info{id="482113b805f7",image="docker.io/library/httpd:latest",name="web_server",pod_id="",pod_name="",ports="0.0.0.0:8000->80/tcp"} 1
+podman_container_info{id="19286a13dc23",image="docker.io/library/sonarqube:latest",image_id="6d79dc68eeb4",name="sonar01",pod_id="",pod_name="",ports="0.0.0.0:9000->9000/tcp"} 1
+podman_container_info{id="482113b805f7",image="docker.io/library/httpd:latest",image_id="10e58ed1b203",name="web_server",pod_id="",pod_name="",ports="0.0.0.0:8000->80/tcp"} 1
 
 # HELP podman_container_state Container current state (-1=unknown,0=created,1=initialized,2=running,3=stopped,4=paused,5=exited,6=removing,7=stopping).
 # TYPE podman_container_state gauge
 podman_container_state{id="19286a13dc23",pod_id="",pod_name=""} 2
 podman_container_state{id="482113b805f7",pod_id="",pod_name=""} 4
+
+# HELP podman_container_health Container current health (-1=unknown,0=healthy,1=unhealthy,2=starting).
+# TYPE podman_container_health gauge
+podman_container_health{id="19286a13dc23",pod_id="",pod_name=""} -1
+podman_container_health{id="482113b805f7",pod_id="",pod_name=""} 0
 
 # HELP podman_container_block_input_total Container block input.
 # TYPE podman_container_block_input_total counter

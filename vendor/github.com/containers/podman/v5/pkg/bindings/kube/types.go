@@ -20,6 +20,8 @@ type PlayOptions struct {
 	Password *string
 	// Network - name of the networks to connect to.
 	Network *[]string
+	// NoHostname - do not generate /etc/hostname file in pod's containers
+	NoHostname *bool
 	// NoHosts - do not generate /etc/hosts file in pod's containers
 	NoHosts *bool
 	// Quiet - suppress output when pulling images.
@@ -61,6 +63,7 @@ type PlayOptions struct {
 	// Wait - indicates whether to return after having created the pods
 	Wait             *bool
 	ServiceContainer *bool
+	NoPodPrefix      *bool
 }
 
 // ApplyOptions are optional options for applying kube YAML files to a k8s cluster

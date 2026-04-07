@@ -3,9 +3,9 @@ package specgen
 import (
 	"net"
 
-	"github.com/containers/common/libnetwork/types"
-	storageTypes "github.com/containers/storage/types"
 	spec "github.com/opencontainers/runtime-spec/specs-go"
+	"go.podman.io/common/libnetwork/types"
+	storageTypes "go.podman.io/storage/types"
 )
 
 // PodBasicConfig contains basic configuration options for pods.
@@ -55,7 +55,7 @@ type PodBasicConfig struct {
 	InfraName string `json:"infra_name,omitempty"`
 	// Ipc sets the IPC namespace of the pod, set to private by default.
 	// This configuration will then be shared with the entire pod if PID namespace sharing is enabled via --share
-	Ipc Namespace `json:"ipcns,omitempty"`
+	Ipc Namespace `json:"ipcns"`
 	// SharedNamespaces instructs the pod to share a set of namespaces.
 	// Shared namespaces will be joined (by default) by every container
 	// which joins the pod.
@@ -86,13 +86,13 @@ type PodBasicConfig struct {
 	// Pid sets the process id namespace of the pod
 	// Optional (defaults to private if unset). This sets the PID namespace of the infra container
 	// This configuration will then be shared with the entire pod if PID namespace sharing is enabled via --share
-	Pid Namespace `json:"pidns,omitempty"`
+	Pid Namespace `json:"pidns"`
 	// Userns is used to indicate which kind of Usernamespace to enter.
 	// Any containers created within the pod will inherit the pod's userns settings.
 	// Optional
-	Userns Namespace `json:"userns,omitempty"`
+	Userns Namespace `json:"userns"`
 	// UtsNs is used to indicate the UTS mode the pod is in
-	UtsNs Namespace `json:"utsns,omitempty"`
+	UtsNs Namespace `json:"utsns"`
 	// Devices contains user specified Devices to be added to the Pod
 	Devices []string `json:"pod_devices,omitempty"`
 	// Sysctl sets kernel parameters for the pod
@@ -108,7 +108,7 @@ type PodNetworkConfig struct {
 	// Setting this to anything except default conflicts with NoInfra=true.
 	// Defaults to Bridge as root and Slirp as rootless.
 	// Mandatory.
-	NetNS Namespace `json:"netns,omitempty"`
+	NetNS Namespace `json:"netns"`
 	// PortMappings is a set of ports to map into the infra container.
 	// As, by default, containers share their network with the infra
 	// container, this will forward the ports to the entire pod.
@@ -159,6 +159,10 @@ type PodNetworkConfig struct {
 	// Conflicts with NoInfra=true.
 	// Optional.
 	DNSOption []string `json:"dns_option,omitempty"`
+	// NoManageHostname indicates that /etc/hostname should not be managed
+	//  by the pod. Instead, each container will create a separate
+	// /etc/hostname as they would if not in a pod.
+	NoManageHostname bool `json:"no_manage_hostname,omitempty"`
 	// NoManageHosts indicates that /etc/hosts should not be managed by the
 	// pod. Instead, each container will create a separate /etc/hosts as
 	// they would if not in a pod.
@@ -170,6 +174,13 @@ type PodNetworkConfig struct {
 	// Conflicts with NoInfra=true and NoManageHosts.
 	// Optional.
 	HostAdd []string `json:"hostadd,omitempty"`
+	// HostsFile is the base file to create the `/etc/hosts` file inside the infra container.
+	// This must either be an absolute path to a file on the host system, or one of the
+	// special flags `image` or `none`.
+	// If it is empty it defaults to the base_hosts_file configuration in containers.conf.
+	// Conflicts with NoInfra=true and NoManageHosts.
+	// Optional.
+	HostsFile string `json:"hostsFile,omitempty"`
 	// NetworkOptions are additional options for each network
 	// Optional.
 	NetworkOptions map[string][]string `json:"network_options,omitempty"`
@@ -237,12 +248,6 @@ type PodSpecGenerator struct {
 type PodResourceConfig struct {
 	// ResourceLimits contains linux specific CPU data for the pod
 	ResourceLimits *spec.LinuxResources `json:"resource_limits,omitempty"`
-	// CPU period of the cpuset, determined by --cpus
-	CPUPeriod uint64 `json:"cpu_period,omitempty"`
-	// CPU quota of the cpuset, determined by --cpus
-	CPUQuota int64 `json:"cpu_quota,omitempty"`
-	// ThrottleReadBpsDevice contains the rate at which the devices in the pod can be read from/accessed
-	ThrottleReadBpsDevice map[string]spec.LinuxThrottleDevice `json:"throttleReadBpsDevice,omitempty"`
 }
 
 type PodSecurityConfig struct {

@@ -19,6 +19,9 @@ VERSION = $(shell cat VERSION  | grep VERSION | cut -d'=' -f2)
 REVISION = $(shell cat VERSION  | grep REVISION | cut -d'=' -f2)
 BRANCH=$(shell git rev-parse --abbrev-ref HEAD 2>/dev/null)
 
+PACKIT_RPM := ./rpm
+PACKIT_PREP = ./prepare_sources_result
+
 #=================================================
 # Build binary, clean, install and uninstall
 #=================================================
@@ -28,6 +31,11 @@ all: binary
 .PHONY: clean
 clean:
 	@rm -rf $(BIN)
+	@rm -rf $(PACKIT_PREP)
+	@rm -rf $(PACKIT_RPM)/*.tar.gz
+	@rm -rf *.tar.gz
+	@rm -rf *.rpm
+	@rm -rf *.tar
 
 .PHONY: binary
 binary: $(TARGET)  ## Build prometheus-podman-exporter binary
@@ -101,7 +109,7 @@ install.tools: .install.pre-commit .install.codespell .install.golangci-lint .in
 
 .PHONY: .install.golangci-lint
 .install.golangci-lint:
-	VERSION=1.61.0 ./hack/install_golangci.sh
+	VERSION=2.3.1 ./hack/install_golangci.sh
 
 #=================================================
 # Linting/Formatting/Code Validation targets

@@ -2,7 +2,7 @@
 
 package libpod
 
-import "github.com/containers/common/libnetwork/types"
+import "go.podman.io/common/libnetwork/types"
 
 // State is a storage backend for libpod's current state.
 // A State is only initialized once per instance of libpod.
@@ -24,6 +24,9 @@ type State interface { //nolint:interfacebloat
 
 	// Refresh clears container and pod states after a reboot
 	Refresh() error
+
+	// Type returns the type of state in use
+	Type() string
 
 	// GetDBConfig retrieves several paths configured within the database
 	// when it was created - namely, Libpod root and tmp dirs, c/storage

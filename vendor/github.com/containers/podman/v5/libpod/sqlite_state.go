@@ -12,10 +12,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/containers/common/libnetwork/types"
 	"github.com/containers/podman/v5/libpod/define"
-	"github.com/containers/storage"
 	"github.com/sirupsen/logrus"
+	"go.podman.io/common/libnetwork/types"
+	"go.podman.io/storage"
 
 	// SQLite backend for database/sql
 	_ "github.com/mattn/go-sqlite3"
@@ -31,6 +31,8 @@ type SQLiteState struct {
 }
 
 const (
+	// Name of the actual database file
+	sqliteDbFilename = "db.sql"
 	// Deal with timezone automatically.
 	sqliteOptionLocation = "_loc=auto"
 	// Force an fsync after each transaction (https://www.sqlite.org/pragma.html#pragma_synchronous).
@@ -39,13 +41,16 @@ const (
 	sqliteOptionForeignKeys = "&_foreign_keys=1"
 	// Make sure that transactions happen exclusively.
 	sqliteOptionTXLock = "&_txlock=exclusive"
+	// Enforce case sensitivity for LIKE
+	sqliteOptionCaseSensitiveLike = "&_cslike=TRUE"
 
 	// Assembled sqlite options used when opening the database.
-	sqliteOptions = "db.sql?" +
+	sqliteOptions = "?" +
 		sqliteOptionLocation +
 		sqliteOptionSynchronous +
 		sqliteOptionForeignKeys +
-		sqliteOptionTXLock
+		sqliteOptionTXLock +
+		sqliteOptionCaseSensitiveLike
 )
 
 // NewSqliteState creates a new SQLite-backed state database.
@@ -53,17 +58,12 @@ func NewSqliteState(runtime *Runtime) (_ State, defErr error) {
 	logrus.Info("Using sqlite as database backend")
 	state := new(SQLiteState)
 
-	basePath := runtime.storageConfig.GraphRoot
-	if runtime.storageConfig.TransientStore {
-		basePath = runtime.storageConfig.RunRoot
-	} else if !runtime.storageSet.StaticDirSet {
-		basePath = runtime.config.Engine.StaticDir
-	}
+	dbPath := sqliteStatePath(runtime)
 
 	// c/storage is set up *after* the DB - so even though we use the c/s
 	// root (or, for transient, runroot) dir, we need to make the dir
 	// ourselves.
-	if err := os.MkdirAll(basePath, 0700); err != nil {
+	if err := os.MkdirAll(filepath.Dir(dbPath), 0o700); err != nil {
 		return nil, fmt.Errorf("creating root directory: %w", err)
 	}
 
@@ -78,7 +78,7 @@ func NewSqliteState(runtime *Runtime) (_ State, defErr error) {
 	}
 	sqliteOptionBusyTimeout := "&_busy_timeout=" + busyTimeout
 
-	conn, err := sql.Open("sqlite3", filepath.Join(basePath, sqliteOptions+sqliteOptionBusyTimeout))
+	conn, err := sql.Open("sqlite3", dbPath+sqliteOptions+sqliteOptionBusyTimeout)
 	if err != nil {
 		return nil, fmt.Errorf("initializing sqlite database: %w", err)
 	}
@@ -273,6 +273,10 @@ func (s *SQLiteState) Refresh() (defErr error) {
 	return nil
 }
 
+func (s *SQLiteState) Type() string {
+	return "sqlite"
+}
+
 // GetDBConfig retrieves runtime configuration fields that were created when
 // the database was first initialized
 func (s *SQLiteState) GetDBConfig() (*DBConfig, error) {
@@ -303,7 +307,7 @@ func (s *SQLiteState) GetDBConfig() (*DBConfig, error) {
 }
 
 // ValidateDBConfig validates paths in the given runtime against the database
-func (s *SQLiteState) ValidateDBConfig(runtime *Runtime) (defErr error) {
+func (s *SQLiteState) ValidateDBConfig(_ *Runtime) (defErr error) {
 	if !s.valid {
 		return define.ErrDBClosed
 	}
@@ -313,8 +317,10 @@ func (s *SQLiteState) ValidateDBConfig(runtime *Runtime) (defErr error) {
 		return err
 	}
 
+	// Ignoring prevents a race condition where multiple Podman processes
+	// might try to initialize the database at the same time.
 	const createRow = `
-        INSERT INTO DBconfig VALUES (
+        INSERT OR IGNORE INTO DBconfig VALUES (
                 ?, ?, ?,
                 ?, ?, ?,
                 ?, ?, ?
@@ -381,6 +387,30 @@ func (s *SQLiteState) ValidateDBConfig(runtime *Runtime) (defErr error) {
 		}
 
 		return fmt.Errorf("retrieving DB config: %w", err)
+	}
+
+	// Sometimes, for as-yet unclear reasons, the database value ends up set
+	// to the empty string. If it does, this evaluation is always going to
+	// fail, and libpod will be unusable.
+	// At this point, the check is effectively meaningless - we don't
+	// actually know the settings we should be checking against. The best
+	// thing we can do (and what BoltDB did in this case) is to compare
+	// against the default, on the assumption that is what was in use.
+	// TODO: We can't remove this code without breaking existing SQLite DBs
+	// that already have incorrect values in the database, but we should
+	// investigate why this is happening and try and prevent the creation of
+	// new databases with these garbage checks.
+	if graphRoot == "" {
+		logrus.Debugf("Database uses empty-string graph root, substituting default %q", storeOpts.GraphRoot)
+		graphRoot = storeOpts.GraphRoot
+	}
+	if runRoot == "" {
+		logrus.Debugf("Database uses empty-string run root, substituting default %q", storeOpts.RunRoot)
+		runRoot = storeOpts.RunRoot
+	}
+	if graphDriver == "" {
+		logrus.Debugf("Database uses empty-string graph driver, substituting default %q", storeOpts.GraphDriverName)
+		graphDriver = storeOpts.GraphDriverName
 	}
 
 	checkField := func(fieldName, dbVal, ourVal string, isPath bool) error {
@@ -2186,7 +2216,9 @@ func (s *SQLiteState) LookupVolume(name string) (*Volume, error) {
 		return nil, define.ErrDBClosed
 	}
 
-	rows, err := s.conn.Query("SELECT Name, JSON FROM VolumeConfig WHERE Name LIKE ? ORDER BY LENGTH(Name) ASC;", name+"%")
+	escaper := strings.NewReplacer("\\", "\\\\", "_", "\\_", "%", "\\%")
+	queryString := escaper.Replace(name) + "%"
+	rows, err := s.conn.Query("SELECT Name, JSON FROM VolumeConfig WHERE Name LIKE ? ESCAPE '\\' ORDER BY LENGTH(Name) ASC;", queryString)
 	if err != nil {
 		return nil, fmt.Errorf("querying database for volume %s: %w", name, err)
 	}

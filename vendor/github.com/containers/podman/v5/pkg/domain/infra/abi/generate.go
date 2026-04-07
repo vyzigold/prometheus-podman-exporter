@@ -19,7 +19,7 @@ import (
 	"sigs.k8s.io/yaml"
 )
 
-func (ic *ContainerEngine) GenerateSystemd(ctx context.Context, nameOrID string, options entities.GenerateSystemdOptions) (*entities.GenerateSystemdReport, error) {
+func (ic *ContainerEngine) GenerateSystemd(_ context.Context, nameOrID string, options entities.GenerateSystemdOptions) (*entities.GenerateSystemdReport, error) {
 	// First assume it's a container.
 	ctr, ctrErr := ic.Libpod.LookupContainer(nameOrID)
 	if ctrErr == nil {
@@ -46,7 +46,7 @@ func (ic *ContainerEngine) GenerateSystemd(ctx context.Context, nameOrID string,
 	return &entities.GenerateSystemdReport{Units: units}, nil
 }
 
-func (ic *ContainerEngine) GenerateSpec(ctx context.Context, opts *entities.GenerateSpecOptions) (*entities.GenerateSpecReport, error) {
+func (ic *ContainerEngine) GenerateSpec(_ context.Context, opts *entities.GenerateSpecOptions) (*entities.GenerateSpecReport, error) {
 	var spec *specgen.SpecGenerator
 	var pspec *specgen.PodSpecGenerator
 	var err error
@@ -59,7 +59,12 @@ func (ic *ContainerEngine) GenerateSpec(ctx context.Context, opts *entities.Gene
 	} else if p, err := ic.Libpod.LookupPod(opts.ID); err == nil {
 		pspec = &specgen.PodSpecGenerator{}
 		pspec.Name = p.Name()
-		_, err := generateUtils.PodConfigToSpec(ic.Libpod, pspec, &entities.ContainerCreateOptions{}, opts.ID)
+		_, err := generateUtils.PodConfigToSpec(ic.Libpod, pspec,
+			&entities.ContainerCreateOptions{
+				HealthLogDestination: define.DefaultHealthCheckLocalDestination,
+				HealthMaxLogCount:    define.DefaultHealthMaxLogCount,
+				HealthMaxLogSize:     define.DefaultHealthMaxLogSize,
+			}, opts.ID)
 		if err != nil {
 			return nil, err
 		}
@@ -152,7 +157,7 @@ func (ic *ContainerEngine) GenerateKube(ctx context.Context, nameOrIDs []string,
 			if err != nil {
 				return nil, err
 			}
-			if !(podConfig.UsePodIPC && podConfig.UsePodNet && podConfig.UsePodUTS) {
+			if !podConfig.UsePodIPC || !podConfig.UsePodNet || !podConfig.UsePodUTS {
 				defaultKubeNS = false
 			}
 
@@ -373,7 +378,7 @@ func getKubePVCs(volumes []*libpod.Volume) ([][]byte, error) {
 }
 
 // generateKubeYAML marshalls a kube kind into a YAML file.
-func generateKubeYAML(kubeKind interface{}) ([]byte, error) {
+func generateKubeYAML(kubeKind any) ([]byte, error) {
 	b, err := yaml.Marshal(kubeKind)
 	if err != nil {
 		return nil, err
@@ -397,7 +402,7 @@ func generateKubeOutput(content [][]byte) ([]byte, error) {
 	}
 
 	// Add header to kube YAML file.
-	output = append(output, []byte(fmt.Sprintf(header, podmanVersion.Version))...)
+	output = append(output, fmt.Appendf(nil, header, podmanVersion.Version)...)
 
 	// kube generate order is based on helm install order (secret, persistentVolume, service, pod...).
 	// Add kube kinds.

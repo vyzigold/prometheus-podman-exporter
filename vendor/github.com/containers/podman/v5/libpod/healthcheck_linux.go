@@ -4,17 +4,18 @@ package libpod
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math/rand"
 	"os"
 	"os/exec"
 	"strings"
 
-	systemdCommon "github.com/containers/common/pkg/systemd"
 	"github.com/containers/podman/v5/pkg/errorhandling"
 	"github.com/containers/podman/v5/pkg/rootless"
 	"github.com/containers/podman/v5/pkg/systemd"
 	"github.com/sirupsen/logrus"
+	systemdCommon "go.podman.io/common/pkg/systemd"
 )
 
 // createTimer systemd timers for healthchecks of a container
@@ -39,7 +40,8 @@ func (c *Container) createTimer(interval string, isStartup bool) error {
 		cmd = append(cmd, "--setenv=PATH="+path)
 	}
 
-	cmd = append(cmd, "--unit", hcUnitName, fmt.Sprintf("--on-unit-inactive=%s", interval), "--timer-property=AccuracySec=1s", podman)
+	// StartLimitIntervalSec=0 so we don't hit the restart limit
+	cmd = append(cmd, "--unit", hcUnitName, fmt.Sprintf("--on-unit-inactive=%s", interval), "--timer-property=AccuracySec=1s", "--property=StartLimitIntervalSec=0", podman)
 
 	if logrus.IsLevelEnabled(logrus.DebugLevel) {
 		cmd = append(cmd, "--log-level=debug", "--syslog")
@@ -55,7 +57,11 @@ func (c *Container) createTimer(interval string, isStartup bool) error {
 	logrus.Debugf("creating systemd-transient files: %s %s", "systemd-run", cmd)
 	systemdRun := exec.Command("systemd-run", cmd...)
 	if output, err := systemdRun.CombinedOutput(); err != nil {
-		return fmt.Errorf("%s", output)
+		exitError := &exec.ExitError{}
+		if errors.As(err, &exitError) {
+			return fmt.Errorf("systemd-run failed: %w: output: %s", err, strings.TrimSpace(string(output)))
+		}
+		return fmt.Errorf("failed to execute systemd-run: %w", err)
 	}
 
 	c.state.HCUnitName = hcUnitName

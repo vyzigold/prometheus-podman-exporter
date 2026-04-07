@@ -1,13 +1,11 @@
 package utils
 
 import (
-	"encoding/binary"
 	"encoding/json"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
-	"unsafe"
 
 	"golang.org/x/sys/unix"
 )
@@ -15,20 +13,6 @@ import (
 const (
 	exitSignalOffset = 128
 )
-
-// NativeEndian is the native byte order of the host system.
-var NativeEndian binary.ByteOrder
-
-func init() {
-	// Copied from <golang.org/x/net/internal/socket/sys.go>.
-	i := uint32(1)
-	b := (*[4]byte)(unsafe.Pointer(&i))
-	if b[0] == 1 {
-		NativeEndian = binary.LittleEndian
-	} else {
-		NativeEndian = binary.BigEndian
-	}
-}
 
 // ExitStatus returns the correct exit status for a process based on if it
 // was signaled or exited cleanly
@@ -66,26 +50,26 @@ func CleanPath(path string) string {
 
 	// Ensure that all paths are cleaned (especially problematic ones like
 	// "/../../../../../" which can cause lots of issues).
-	path = filepath.Clean(path)
+
+	if filepath.IsAbs(path) {
+		return filepath.Clean(path)
+	}
 
 	// If the path isn't absolute, we need to do more processing to fix paths
 	// such as "../../../../<etc>/some/path". We also shouldn't convert absolute
 	// paths to relative ones.
-	if !filepath.IsAbs(path) {
-		path = filepath.Clean(string(os.PathSeparator) + path)
-		// This can't fail, as (by definition) all paths are relative to root.
-		path, _ = filepath.Rel(string(os.PathSeparator), path)
-	}
+	path = filepath.Clean(string(os.PathSeparator) + path)
+	// This can't fail, as (by definition) all paths are relative to root.
+	path, _ = filepath.Rel(string(os.PathSeparator), path)
 
-	// Clean the path again for good measure.
-	return filepath.Clean(path)
+	return path
 }
 
-// stripRoot returns the passed path, stripping the root path if it was
+// StripRoot returns the passed path, stripping the root path if it was
 // (lexicially) inside it. Note that both passed paths will always be treated
 // as absolute, and the returned path will also always be absolute. In
 // addition, the paths are cleaned before stripping the root.
-func stripRoot(root, path string) string {
+func StripRoot(root, path string) string {
 	// Make the paths clean and absolute.
 	root, path = CleanPath("/"+root), CleanPath("/"+path)
 	switch {
@@ -93,7 +77,7 @@ func stripRoot(root, path string) string {
 		path = "/"
 	case root == "/":
 		// do nothing
-	case strings.HasPrefix(path, root+"/"):
+	default:
 		path = strings.TrimPrefix(path, root+"/")
 	}
 	return CleanPath("/" + path)
@@ -104,8 +88,8 @@ func stripRoot(root, path string) string {
 func SearchLabels(labels []string, key string) (string, bool) {
 	key += "="
 	for _, s := range labels {
-		if strings.HasPrefix(s, key) {
-			return s[len(key):], true
+		if val, ok := strings.CutPrefix(s, key); ok {
+			return val, true
 		}
 	}
 	return "", false
@@ -117,15 +101,15 @@ func SearchLabels(labels []string, key string) (string, bool) {
 func Annotations(labels []string) (bundle string, userAnnotations map[string]string) {
 	userAnnotations = make(map[string]string)
 	for _, l := range labels {
-		parts := strings.SplitN(l, "=", 2)
-		if len(parts) < 2 {
+		name, value, ok := strings.Cut(l, "=")
+		if !ok {
 			continue
 		}
-		if parts[0] == "bundle" {
-			bundle = parts[1]
+		if name == "bundle" {
+			bundle = value
 		} else {
-			userAnnotations[parts[0]] = parts[1]
+			userAnnotations[name] = value
 		}
 	}
-	return
+	return bundle, userAnnotations
 }
