@@ -1,3 +1,5 @@
+IMG ?= quay.io/openstack-k8s-operators/prometheus-podman-exporter:latest
+
 PKG_PATH = "github.com/containers/prometheus-podman-exporter"
 BIN := ./bin
 GO := go
@@ -182,6 +184,14 @@ _HLP_TGTS_RX = '^[[:print:]]+:.*?\#\# .*$$'
 _HLP_TGTS_CMD = grep -E $(_HLP_TGTS_RX) $(MAKEFILE_LIST)
 _HLP_TGTS_LEN = $(shell $(_HLP_TGTS_CMD) | cut -d : -f 1 | wc -L)
 _HLPFMT = "%-$(_HLP_TGTS_LEN)s %s\n"
+.PHONY: docker-build
+docker-build: ## Build container image
+	podman build -t ${IMG} -f Containerfile .
+
+.PHONY: docker-push
+docker-push: ## Push container image
+	podman push ${IMG}
+
 .PHONY: help
 help: ## Print listing of key targets with their descriptions
 	@printf $(_HLPFMT) "Target:" "Description:"
